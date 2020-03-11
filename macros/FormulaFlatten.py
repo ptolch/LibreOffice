@@ -1,3 +1,11 @@
+# -----------------------------------------------------------
+# Python macro for expanding calc formula precedents into a 
+# a single formula
+#
+# (C) 2020 Paul Tolchard, London, England
+# Released under GNU Public License (GPL)
+# -----------------------------------------------------------
+
 import sys
 from io import StringIO
 import tokenize
@@ -8,16 +16,28 @@ from com.sun.star.table.CellContentType import TEXT, EMPTY, VALUE, FORMULA
 
 
 def getTokens(formula):
+    """Convert a formula string into a token list
+
+    Uses tokenizer and adjusts NAMES to cater to spreadsheet references
+    """
     result = list(tokenize.generate_tokens(StringIO(formula).readline))
     if result[0].string == "=":
         result.pop(0)
     return fixNames(result)
 
 def fixNames(tokenList):
-    """I'm co-opting the python tokenizer and have to tweak the NAME tokens
+    """Tweak a token list taking spreadsheet references into account.
+
+    I'm co-opting the python tokenizer and have to tweak the NAME tokens
     to allow for spreadsheet references.
     A custom tokenizer or, even better, one for calc sheets would obviate
     this completely.
+
+    Parameters
+    tokenList : list of TokenInfo from tokenizer
+
+    Returns
+    list of TokenInfo
     """
     result = []
     while len(tokenList) > 0:
@@ -45,13 +65,22 @@ def fixNames(tokenList):
     return result
            
 def substitueFormulaReference(token):
-    """If a NAME token corresponds to a formula rather than a value,
+    """Given a token, inspect for cell references and return either
+    the given token or tokens that represent formula.
+
+    If a NAME token corresponds to a formula rather than a value,
     replace the NAME with the respective formula taking care the context
     of resulting NAMEs is preserved e.g.
     $Sheet1.A1 = A3 * A2 --> $Sheet1.A3 * $Sheet1.A2
+
+    Parameters
+    token : TokenInfo
+
+    Returns
+    [TokenInfo]
     """
     if token == None or token.type != tokenize.NAME: return [token]
-    formula = hasFormula(token.string)
+    formula = getFormula(token.string)
     if formula == None: return [token]
     result = []
     formula = tokenize.untokenize(getTokens(formula)) # expunge leading =
@@ -67,7 +96,14 @@ def substitueFormulaReference(token):
     return result[:-1] # drop end marker
 
 def processPrecedents(tokens):
-    """Process the tokenized formula applying precendent substitution"""
+    """Process the tokenized formula applying precendent substitution
+
+    Parameters
+    tokens : [TokenInfo]
+
+    Returns
+    [TokenInfo]
+    """
     i = 0
     result = tokens.copy()
     while i < len(result):
@@ -81,17 +117,31 @@ def processPrecedents(tokens):
     return result
 
 
-def getFormula(tokens):
-    """Strip tokens back as a string"""
+def tokensToFormula(tokens):
+    """Strip tokens back as a string
+
+    Parameters
+    tokens : [TokenInfo]
+
+    Returns
+    string
+    """
     return " ".join(map(lambda x:x.string, tokens))
 
-def hasFormula(name):
+def getFormula(name):
     """Check if given name corresponds to a cell containing a formula and if so, return the formula
+
     Complicated by the fact that the name could refer to a cell
     in a different file. Not going to follow those, so treat as if atomic value.
     Could be a range or anything the tokenizer sees as a NAME e.g. functions
+
+    Parameters
+    name : TokenInfo NAME token
+
+    Returns
+    string or None
     """
-    msgBox("hasFormula", name)
+    dbgBox("getFormula", name)
     # Tokenize the name string - if 2nd token is a comment --> in different file
     tokens = getTokens(name)
     if len(tokens) > 2 and tokens[1].type == tokenize.COMMENT:
@@ -99,7 +149,7 @@ def hasFormula(name):
     refParts = name.split('.')
     if ':' in refParts[-1]: return None #range, baby, range
     if len(refParts) == 1: # simple cell reference, no dots
-        msgBox("hasFormula simple ref", name)
+        dbgBox("getFormula simple ref", name)
         try:
             cell = model.CurrentController.ActiveSheet.getCellRangeByName(name)
         except:
@@ -107,7 +157,7 @@ def hasFormula(name):
     else:
         sheetName = '.'.join(refParts[:-1]).replace('$','').strip()
         cellName = refParts[-1]
-        msgBox("hasFormula resolve sheet", sheetName + "\n" + cellName)
+        dbgBox("getFormula resolve sheet", sheetName + "\n" + cellName)
         try:
             sheet = model.Sheets.getByName(sheetName)
             cell = sheet.getCellRangeByName(cellName)
@@ -118,7 +168,7 @@ def hasFormula(name):
     return None
 
 
-def msgBox(title, content):
+def dbgBox(title, content):
     if debugMeBaby == 0: return None
     parentwin = model.CurrentController.Frame.ContainerWindow
     box = parentwin.getToolkit().createMessageBox(parentwin, MESSAGEBOX,  BUTTONS_OK, title, content)
@@ -127,12 +177,14 @@ def msgBox(title, content):
         print("OK")
     return None
 
-def FlattenFormula(*args):
+def FlattenFormula():
     """Flatten precedents in formula in a single expression.
+
     Examines active cell for a formula and shows the transformed
     formula. Cell references are replaced by the formula
     they contain recursively. Cell references that refer to a
-    value, range or other file are left alone."""
+    value, range or other file are left alone.
+    """
     desktop = XSCRIPTCONTEXT.getDesktop()
     global model 
     model = desktop.getCurrentComponent()
@@ -142,7 +194,7 @@ def FlattenFormula(*args):
     active_cell = model.CurrentController.getSelection()
     if active_cell.getType() != FORMULA:
         return None
-    flat = getFormula(processPrecedents(getTokens(active_cell.Formula)))
+    flat = tokensToFormula(processPrecedents(getTokens(active_cell.Formula)))
     resultStr = "Current cell: {},{}\nOriginal Formula : {}\nFlattened:\n{}".format(
         active_cell.getCellAddress().Column,
         active_cell.getCellAddress().Row,
